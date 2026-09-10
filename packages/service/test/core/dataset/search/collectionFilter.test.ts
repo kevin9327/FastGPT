@@ -179,6 +179,16 @@ describe('checkValue', () => {
     ['$lt', 2, 1, 'datetime', true],
     ['$is', ['a', 'b'], ['b', 'a'], 'array', true],
     ['$in', ['a', 'b', 'c'], ['a', 'b'], 'array', true],
+    ['$contains', 'a', ['a', 'b'], 'array', true],
+    ['$contains', 'c', ['a', 'b'], 'array', false],
+    ['$contains', ['a', 'b'], ['a', 'b', 'c'], 'array', true],
+    ['$contains', ['a', 'c'], ['a', 'b'], 'array', false],
+    ['$contains', [], ['a', 'b'], 'array', false],
+    ['$notContains', 'c', ['a', 'b'], 'array', true],
+    ['$notContains', 'a', ['a', 'b'], 'array', false],
+    ['$notContains', ['c', 'd'], ['a', 'b'], 'array', true],
+    ['$notContains', ['b', 'c'], ['a', 'b'], 'array', false],
+    ['$notContains', [], ['a', 'b'], 'array', false],
     ['$empty', true, undefined, 'array', true],
     ['$unsupported', 'x', 'x', 'string', false]
   ])('compares %s for %s values', (op, target, stored, tagType, expected) => {

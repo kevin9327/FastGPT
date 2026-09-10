@@ -110,15 +110,16 @@ export function checkValue(
       };
       const subset = (left: string[], right: string[]) =>
         left.every((item) => right.includes(item));
+      const targets = typeof target === 'string' ? [target] : targetArray;
       switch (op) {
         case '$is':
           return Array.isArray(target) && equal(stored, targetArray);
         case '$isNot':
           return Array.isArray(target) && !equal(stored, targetArray);
         case '$contains':
-          return typeof target === 'string' && stored.includes(target);
+          return targets.length > 0 && targets.every((item) => stored.includes(item));
         case '$notContains':
-          return typeof target === 'string' && !stored.includes(target);
+          return targets.length > 0 && targets.every((item) => !stored.includes(item));
         case '$in':
           return Array.isArray(target) && subset(stored, targetArray);
         case '$notIn':
