@@ -1119,18 +1119,60 @@ describe('markdown 字符串处理函数测试', () => {
       ]);
       expect(await parseMarkdownBase64Images(text)).toBe(text);
 
-      // 两张图片的 alt 分别含代码跨度里的 `[` 和 `]`，仍是两个独立节点。
+      // alt 含反引号时不做嵌套配对，回到原有的第一个右方括号规则：
+      // 含代码 `[` 的图片照常识别，含代码 `]` 的图片和改动前一样不识别，后文不受影响。
       expect(
-        matchMarkdownImages('![x `[`](https://a.com/1.png) ![y `]`](https://b.com/2.png)')
+        matchMarkdownImages(
+          '![x `[`](https://a.com/1.png) ![y `]`](https://b.com/2.png) ![z [1]](https://c.com/3.png)'
+        )
       ).toMatchObject([
         { altText: 'x `[`', url: 'https://a.com/1.png' },
-        { altText: 'y `]`', url: 'https://b.com/2.png' }
+        { altText: 'z [1]', url: 'https://c.com/3.png' }
       ]);
 
       // 空行之后的右方括号不和前一段的左方括号配对。
       expect(
         matchMarkdownImages('![a [b](https://a.com/1.png)\n\nc](https://b.com/2.png)')
       ).toMatchObject([{ altText: 'a [b', url: 'https://a.com/1.png' }]);
+    });
+
+    it('HTML 标签或前文标题里的反引号不改变图片边界', async () => {
+      // HTML 属性值里的 `[` 不参与配对，图片仍在第一个右方括号结束，正文不丢失。
+      const html =
+        '![a <span title="[">](https://example.com/a.png) and ](data:image/png;base64,AAAA) end';
+      expect(matchMarkdownImages(html)).toMatchObject([
+        { altText: 'a <span title="[">', url: 'https://example.com/a.png' }
+      ]);
+      expect(await parseMarkdownBase64Images(html)).toBe(html);
+
+      // 第一张图片标题里的反引号不会和后文的反引号配成代码跨度，第二张图片照常识别。
+      const titled =
+        '![first](https://example.com/a.png "literal `") ![second [1]](data:image/png;base64,AAAA) trailing ` end';
+      expect(matchMarkdownImages(titled)).toMatchObject([
+        { altText: 'first', url: 'https://example.com/a.png' },
+        { altText: 'second [1]', url: 'data:image/png;base64,AAAA' }
+      ]);
+      const uploaded: string[] = [];
+      const result = await parseMarkdownBase64Images(titled, {
+        controller: async (image) => {
+          uploaded.push(image.url);
+          return { key: 'uploaded-key' };
+        }
+      });
+      expect(uploaded).toEqual(['data:image/png;base64,AAAA']);
+      expect(result).toContain('![second [1]](uploaded-key)');
+    });
+
+    it('多种长度且不闭合的反引号串不会反复扫描后文', () => {
+      const runs = Array.from({ length: 400 }, (_, i) => '`'.repeat(i + 1)).join(' ');
+      const text = `![a [1]](https://example.com/a.png) ${runs} ${'x'.repeat(1_000_000)}`;
+
+      const started = performance.now();
+      expect(matchMarkdownImages(text)).toMatchObject([
+        { altText: 'a [1]', url: 'https://example.com/a.png' }
+      ]);
+      // 每种长度各扫一遍剩余文本时约需数秒；单次线性扫描远低于这个上限。
+      expect(performance.now() - started).toBeLessThan(500);
     });
 
     it('大量未配对 alt 的图片仍按线性时间扫描', () => {

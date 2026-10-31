@@ -318,19 +318,22 @@ const findParagraphEnd = (text: string, from: number) => {
 
 /**
  * 一次线性扫描，记录每个 `[` 配对的 `]`。CommonMark 允许图片描述里出现成对的方括号
- * （如 `![图 [1]](url)`）；转义的方括号、代码跨度里的方括号都不参与配对，配对也不跨越空行。
+ * （如 `![图 [1]](url)`）；转义的方括号不参与配对，配对也不跨越空行。
+ *
+ * 反引号和 `<` 可能开始代码跨度或 HTML 标签，它们的优先级高于方括号配对。为避免误判，
+ * 左右方括号之间出现这两种字符时不记录配对，图片描述回到原有的「第一个右方括号」规则。
+ * 这样配对结果只会在原规则之外多识别纯文本的嵌套方括号，不会让描述越过代码或 HTML。
  */
 const pairSquareBrackets = (text: string) => {
   const pairs = new Map<number, number>();
   let stack: number[] = [];
   let paragraphEnd = findParagraphEnd(text, 0);
-  // 同一段落里某个长度的反引号串已经找不到结尾时，后面同长度的也找不到，不再重复查找。
-  let missingCodeClosers = new Set<number>();
+  // 最近一个反引号或 `<` 的位置；左方括号在它之前的配对不记录。
+  let lastInlineMarkup = -1;
 
   for (let i = 0; i < text.length; i++) {
     if (i >= paragraphEnd) {
       stack = [];
-      missingCodeClosers = new Set();
       paragraphEnd = findParagraphEnd(text, i + 1);
       continue;
     }
@@ -338,34 +341,13 @@ const pairSquareBrackets = (text: string) => {
     const char = text[i];
     if (char === '\\') {
       i++;
-    } else if (char === '`') {
-      let runEnd = i;
-      while (text[runEnd] === '`') runEnd++;
-      const length = runEnd - i;
-      let close = -1;
-      if (!missingCodeClosers.has(length)) {
-        for (let j = runEnd; j < paragraphEnd;) {
-          if (text[j] !== '`') {
-            j++;
-            continue;
-          }
-          let next = j;
-          while (text[next] === '`') next++;
-          if (next - j === length) {
-            close = j;
-            break;
-          }
-          j = next;
-        }
-        if (close === -1) missingCodeClosers.add(length);
-      }
-      // 代码跨度整体跳过；没有结尾的反引号按普通字符处理。
-      i = close === -1 ? runEnd - 1 : close + length - 1;
+    } else if (char === '`' || char === '<') {
+      lastInlineMarkup = i;
     } else if (char === '[') {
       stack.push(i);
     } else if (char === ']') {
       const open = stack.pop();
-      if (open !== undefined) pairs.set(open, i);
+      if (open !== undefined && open > lastInlineMarkup) pairs.set(open, i);
     }
   }
 
@@ -388,10 +370,18 @@ const findFirstClosingBracket = (text: string, startIndex: number) => {
  * 找到图片描述的右方括号。优先使用配对的右方括号；找不到配对，或配对的右方括号后面
  * 不是 `(` 时，沿用第一个未转义的右方括号，保持原有的宽松匹配。
  */
-const findClosingBracket = (text: string, startIndex: number, pairs: Map<number, number>) => {
-  const paired = pairs.get(startIndex - 1);
+const findClosingBracket = ({
+  text,
+  altStart,
+  pairs
+}: {
+  text: string;
+  altStart: number;
+  pairs: Map<number, number>;
+}) => {
+  const paired = pairs.get(altStart - 1);
   if (paired !== undefined && text[paired + 1] === '(') return paired;
-  return findFirstClosingBracket(text, startIndex);
+  return findFirstClosingBracket(text, altStart);
 };
 
 /**
@@ -505,7 +495,7 @@ const scanMarkdownImages = (text = '') => {
 
     const altStart = imageStart + 2;
     bracketPairs ??= pairSquareBrackets(text);
-    const altEnd = findClosingBracket(text, altStart, bracketPairs);
+    const altEnd = findClosingBracket({ text, altStart, pairs: bracketPairs });
     if (altEnd === -1 || text[altEnd + 1] !== '(') {
       start = imageStart + 2;
       continue;
