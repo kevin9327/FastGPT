@@ -1056,6 +1056,55 @@ describe('markdown 字符串处理函数测试', () => {
       expect(result[1].url).toBe('https://c.com/2.png');
     });
 
+    it('alt 文本里成对的方括号不会提前结束图片描述', () => {
+      // CommonMark 允许图片描述里出现成对的方括号，`![图 [1]](url)` 是一张图片。
+      const text = '见 ![图 [1] 示意](https://example.com/fig1.png) 与 ![b](https://c.com/2.png)';
+      const result = matchMarkdownImages(text);
+
+      expect(result).toEqual([
+        {
+          altText: '图 [1] 示意',
+          url: 'https://example.com/fig1.png',
+          fullMatch: '![图 [1] 示意](https://example.com/fig1.png)',
+          index: 2
+        },
+        {
+          altText: 'b',
+          url: 'https://c.com/2.png',
+          fullMatch: '![b](https://c.com/2.png)',
+          index: 46
+        }
+      ]);
+      expect(
+        replaceMarkdownImageAltText('![a [b] [c]](https://example.com/x.png "t")', 'next')
+      ).toBe('![next](https://example.com/x.png "t")');
+    });
+
+    it('alt 文本里未配对或转义的方括号仍按原规则处理', () => {
+      // 转义的方括号不参与配对。
+      expect(matchMarkdownImages(String.raw`![a \[b](https://example.com/x.png)`)).toEqual([
+        {
+          altText: String.raw`a \[b`,
+          url: 'https://example.com/x.png',
+          fullMatch: String.raw`![a \[b](https://example.com/x.png)`,
+          index: 0
+        }
+      ]);
+      // 找不到配对的右方括号时，沿用第一个右方括号，保持原有的宽松匹配。
+      expect(matchMarkdownImages('![a [b](https://example.com/x.png)')).toEqual([
+        {
+          altText: 'a [b',
+          url: 'https://example.com/x.png',
+          fullMatch: '![a [b](https://example.com/x.png)',
+          index: 0
+        }
+      ]);
+      // 后文的右方括号能配对但后面不是 `(`，同样沿用第一个右方括号。
+      expect(matchMarkdownImages('![a [b](https://example.com/x.png) 见 c]')).toMatchObject([
+        { altText: 'a [b', url: 'https://example.com/x.png' }
+      ]);
+    });
+
     it('传入空字符串或非法输入时不报错且返回空数组', () => {
       expect(matchMarkdownImages('')).toEqual([]);
       expect(matchMarkdownImages(null as any)).toEqual([]);

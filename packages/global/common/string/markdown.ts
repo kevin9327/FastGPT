@@ -306,17 +306,34 @@ export const matchDocumentImages = (text = ''): DocumentImageItem[] => {
   return safeMatches;
 };
 
+/**
+ * 找到图片描述的右方括号。CommonMark 允许描述里出现成对的方括号（如 `![图 [1]](url)`），
+ * 所以按嵌套深度配对；转义的方括号不参与配对。找不到配对的右方括号，或配对的右方括号
+ * 后面不是 `(` 时，沿用第一个未转义的右方括号，保持原有的宽松匹配。
+ */
 const findClosingBracket = (text: string, startIndex: number) => {
+  let depth = 0;
+  let firstClosing = -1;
+
   for (let i = startIndex; i < text.length; i++) {
     if (text[i] === '\\') {
       i++;
       continue;
     }
 
-    if (text[i] === ']') return i;
+    if (text[i] === '[') {
+      depth++;
+    } else if (text[i] === ']') {
+      if (depth === 0) {
+        // 配对结果后面不是 `(` 时不构成图片，退回第一个右方括号，不丢掉原来能匹配的图片。
+        return text[i + 1] === '(' || firstClosing === -1 ? i : firstClosing;
+      }
+      if (firstClosing === -1) firstClosing = i;
+      depth--;
+    }
   }
 
-  return -1;
+  return firstClosing;
 };
 
 /**
