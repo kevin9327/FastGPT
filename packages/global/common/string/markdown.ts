@@ -306,34 +306,92 @@ export const matchDocumentImages = (text = ''): DocumentImageItem[] => {
   return safeMatches;
 };
 
-/**
- * 找到图片描述的右方括号。CommonMark 允许描述里出现成对的方括号（如 `![图 [1]](url)`），
- * 所以按嵌套深度配对；转义的方括号不参与配对。找不到配对的右方括号，或配对的右方括号
- * 后面不是 `(` 时，沿用第一个未转义的右方括号，保持原有的宽松匹配。
- */
-const findClosingBracket = (text: string, startIndex: number) => {
-  let depth = 0;
-  let firstClosing = -1;
+/** 从 from 开始找下一个空行（只含空白的行）的位置，找不到时返回文本长度。 */
+const findParagraphEnd = (text: string, from: number) => {
+  for (let i = text.indexOf('\n', from); i !== -1; i = text.indexOf('\n', i + 1)) {
+    let cursor = i + 1;
+    while (text[cursor] === ' ' || text[cursor] === '\t' || text[cursor] === '\r') cursor++;
+    if (cursor >= text.length || text[cursor] === '\n') return i;
+  }
+  return text.length;
+};
 
-  for (let i = startIndex; i < text.length; i++) {
-    if (text[i] === '\\') {
-      i++;
+/**
+ * 一次线性扫描，记录每个 `[` 配对的 `]`。CommonMark 允许图片描述里出现成对的方括号
+ * （如 `![图 [1]](url)`）；转义的方括号、代码跨度里的方括号都不参与配对，配对也不跨越空行。
+ */
+const pairSquareBrackets = (text: string) => {
+  const pairs = new Map<number, number>();
+  let stack: number[] = [];
+  let paragraphEnd = findParagraphEnd(text, 0);
+  // 同一段落里某个长度的反引号串已经找不到结尾时，后面同长度的也找不到，不再重复查找。
+  let missingCodeClosers = new Set<number>();
+
+  for (let i = 0; i < text.length; i++) {
+    if (i >= paragraphEnd) {
+      stack = [];
+      missingCodeClosers = new Set();
+      paragraphEnd = findParagraphEnd(text, i + 1);
       continue;
     }
 
-    if (text[i] === '[') {
-      depth++;
-    } else if (text[i] === ']') {
-      if (depth === 0) {
-        // 配对结果后面不是 `(` 时不构成图片，退回第一个右方括号，不丢掉原来能匹配的图片。
-        return text[i + 1] === '(' || firstClosing === -1 ? i : firstClosing;
+    const char = text[i];
+    if (char === '\\') {
+      i++;
+    } else if (char === '`') {
+      let runEnd = i;
+      while (text[runEnd] === '`') runEnd++;
+      const length = runEnd - i;
+      let close = -1;
+      if (!missingCodeClosers.has(length)) {
+        for (let j = runEnd; j < paragraphEnd;) {
+          if (text[j] !== '`') {
+            j++;
+            continue;
+          }
+          let next = j;
+          while (text[next] === '`') next++;
+          if (next - j === length) {
+            close = j;
+            break;
+          }
+          j = next;
+        }
+        if (close === -1) missingCodeClosers.add(length);
       }
-      if (firstClosing === -1) firstClosing = i;
-      depth--;
+      // 代码跨度整体跳过；没有结尾的反引号按普通字符处理。
+      i = close === -1 ? runEnd - 1 : close + length - 1;
+    } else if (char === '[') {
+      stack.push(i);
+    } else if (char === ']') {
+      const open = stack.pop();
+      if (open !== undefined) pairs.set(open, i);
     }
   }
 
-  return firstClosing;
+  return pairs;
+};
+
+/** 第一个未转义的右方括号，即原有的宽松匹配。 */
+const findFirstClosingBracket = (text: string, startIndex: number) => {
+  for (let i = startIndex; i < text.length; i++) {
+    if (text[i] === '\\') {
+      i++;
+    } else if (text[i] === ']') {
+      return i;
+    }
+  }
+  return -1;
+};
+
+/**
+ * 找到图片描述的右方括号。优先使用配对的右方括号；找不到配对，或配对的右方括号后面
+ * 不是 `(` 时，沿用第一个未转义的右方括号，保持原有的宽松匹配。
+ */
+const findClosingBracket = (text: string, startIndex: number, pairs: Map<number, number>) => {
+  const paired = pairs.get(startIndex - 1);
+  if (paired !== undefined && text[paired + 1] === '(') return paired;
+  return findFirstClosingBracket(text, startIndex);
 };
 
 /**
@@ -349,6 +407,7 @@ const scanMarkdownImages = (text = '') => {
     replaceAltText: (nextAltText: string) => string;
   })[] = [];
   let start = 0;
+  let bracketPairs: Map<number, number> | undefined;
 
   /** 只用于本次扫描，返回原文中的地址区间和图片结束位置。 */
   const readDestination = (contentStart: number) => {
@@ -445,7 +504,8 @@ const scanMarkdownImages = (text = '') => {
     if (imageStart === -1) break;
 
     const altStart = imageStart + 2;
-    const altEnd = findClosingBracket(text, altStart);
+    bracketPairs ??= pairSquareBrackets(text);
+    const altEnd = findClosingBracket(text, altStart, bracketPairs);
     if (altEnd === -1 || text[altEnd + 1] !== '(') {
       start = imageStart + 2;
       continue;

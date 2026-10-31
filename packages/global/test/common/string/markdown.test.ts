@@ -1105,6 +1105,52 @@ describe('markdown 字符串处理函数测试', () => {
       ]);
     });
 
+    it('代码跨度里的方括号不参与配对，配对也不跨越空行', async () => {
+      // 代码跨度优先于方括号配对：alt 里的 `[` 不应让描述一直延伸到后文的代码示例。
+      const text =
+        '![a `[`](https://example.com/a.png)\n\nExample: `](data:image/png;base64,AAAA)`';
+      expect(matchMarkdownImages(text)).toEqual([
+        {
+          altText: 'a `[`',
+          url: 'https://example.com/a.png',
+          fullMatch: '![a `[`](https://example.com/a.png)',
+          index: 0
+        }
+      ]);
+      expect(await parseMarkdownBase64Images(text)).toBe(text);
+
+      // 两张图片的 alt 分别含代码跨度里的 `[` 和 `]`，仍是两个独立节点。
+      expect(
+        matchMarkdownImages('![x `[`](https://a.com/1.png) ![y `]`](https://b.com/2.png)')
+      ).toMatchObject([
+        { altText: 'x `[`', url: 'https://a.com/1.png' },
+        { altText: 'y `]`', url: 'https://b.com/2.png' }
+      ]);
+
+      // 空行之后的右方括号不和前一段的左方括号配对。
+      expect(
+        matchMarkdownImages('![a [b](https://a.com/1.png)\n\nc](https://b.com/2.png)')
+      ).toMatchObject([{ altText: 'a [b', url: 'https://a.com/1.png' }]);
+    });
+
+    it('大量未配对 alt 的图片仍按线性时间扫描', () => {
+      const count = 20000;
+      const unpaired = Array.from(
+        { length: count },
+        (_, i) => `![a [b](https://example.com/${i}.png)`
+      ).join(' ');
+      const withCode = Array.from(
+        { length: count },
+        (_, i) => `![array \`[\`](https://example.com/${i}.png)`
+      ).join(' ');
+
+      const started = performance.now();
+      expect(matchMarkdownImages(unpaired)).toHaveLength(count);
+      expect(matchMarkdownImages(withCode)).toHaveLength(count);
+      // 逐图重扫剩余全文时 20000 张需要数十秒；线性扫描远低于这个上限。
+      expect(performance.now() - started).toBeLessThan(5000);
+    });
+
     it('传入空字符串或非法输入时不报错且返回空数组', () => {
       expect(matchMarkdownImages('')).toEqual([]);
       expect(matchMarkdownImages(null as any)).toEqual([]);
