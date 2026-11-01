@@ -1163,6 +1163,35 @@ describe('markdown 字符串处理函数测试', () => {
       expect(result).toContain('![second [1]](uploaded-key)');
     });
 
+    it('描述里的普通小于号不影响嵌套方括号配对', async () => {
+      // `x < y` 里的 `<` 后面不是字母、/、! 或 ?，不会开始 HTML 标签。
+      const text = '![图 [1]，x < y 的情况](data:image/png;base64,AAAA "caption")';
+      expect(matchMarkdownImages(text)).toMatchObject([
+        { altText: '图 [1]，x < y 的情况', url: 'data:image/png;base64,AAAA' }
+      ]);
+      const uploaded: string[] = [];
+      const result = await parseMarkdownBase64Images(text, {
+        controller: async (image) => {
+          uploaded.push(image.url);
+          return { key: 'uploaded-key' };
+        }
+      });
+      expect(uploaded).toEqual(['data:image/png;base64,AAAA']);
+      expect(result).toBe('![图 [1]，x < y 的情况](uploaded-key "caption")');
+    });
+
+    it('描述里嵌套链接的地址含有 ]( 时不从地址里构造图片', async () => {
+      const text =
+        'before ![outer [link](https://example.com/a](data:image/png;base64,AAAA).png)](https://example.com/real.png) after';
+      // 外层配对不记录，回到第一个右方括号的原规则：地址不是 base64，正文原样保留。
+      for (const match of matchMarkdownImages(text)) {
+        expect(match.url.startsWith('data:')).toBe(false);
+      }
+      const controller = vi.fn(async () => ({ key: 'uploaded-key' }));
+      expect(await parseMarkdownBase64Images(text, { controller })).toBe(text);
+      expect(controller).not.toHaveBeenCalled();
+    });
+
     it('多种长度且不闭合的反引号串不会反复扫描后文', () => {
       const runs = Array.from({ length: 400 }, (_, i) => '`'.repeat(i + 1)).join(' ');
       const text = `![a [1]](https://example.com/a.png) ${runs} ${'x'.repeat(1_000_000)}`;

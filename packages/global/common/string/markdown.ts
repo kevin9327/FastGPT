@@ -320,15 +320,17 @@ const findParagraphEnd = (text: string, from: number) => {
  * 一次线性扫描，记录每个 `[` 配对的 `]`。CommonMark 允许图片描述里出现成对的方括号
  * （如 `![图 [1]](url)`）；转义的方括号不参与配对，配对也不跨越空行。
  *
- * 反引号和 `<` 可能开始代码跨度或 HTML 标签，它们的优先级高于方括号配对。为避免误判，
- * 左右方括号之间出现这两种字符时不记录配对，图片描述回到原有的「第一个右方括号」规则。
- * 这样配对结果只会在原规则之外多识别纯文本的嵌套方括号，不会让描述越过代码或 HTML。
+ * 反引号和可能开始 HTML 标签的 `<`（后跟字母、`/`、`!` 或 `?`）优先级高于方括号配对。
+ * 为避免误判，左右方括号之间出现它们时不记录配对，图片描述回到原有的「第一个右方括号」规则。
+ * 描述里嵌套的链接或图片（内层 `]` 后紧跟 `(`）的目的地址可能含有 `](`，仅凭方括号无法
+ * 确定边界，因此同样不记录外层配对。这样配对结果只会在原规则之外多识别纯文本的嵌套方括号，
+ * 不会让描述越过代码、HTML 或链接地址。
  */
 const pairSquareBrackets = (text: string) => {
   const pairs = new Map<number, number>();
   let stack: number[] = [];
   let paragraphEnd = findParagraphEnd(text, 0);
-  // 最近一个反引号或 `<` 的位置；左方括号在它之前的配对不记录。
+  // 最近一个反引号、HTML 标签开头或嵌套链接地址的位置；左方括号在它之前的配对不记录。
   let lastInlineMarkup = -1;
 
   for (let i = 0; i < text.length; i++) {
@@ -341,13 +343,15 @@ const pairSquareBrackets = (text: string) => {
     const char = text[i];
     if (char === '\\') {
       i++;
-    } else if (char === '`' || char === '<') {
+    } else if (char === '`' || (char === '<' && /[A-Za-z/!?]/.test(text[i + 1] ?? ''))) {
       lastInlineMarkup = i;
     } else if (char === '[') {
       stack.push(i);
     } else if (char === ']') {
       const open = stack.pop();
       if (open !== undefined && open > lastInlineMarkup) pairs.set(open, i);
+      // 嵌套的链接或图片：外层仍未闭合的左方括号都不再记录配对。
+      if (stack.length > 0 && text[i + 1] === '(') lastInlineMarkup = i;
     }
   }
 
